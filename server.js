@@ -16,6 +16,7 @@ const http = require('node:http');
 const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { URL } = require('node:url');
 
 const ROOT = __dirname;
@@ -273,6 +274,31 @@ function sendJson(res, code, payload) {
   res.end(body);
 }
 
+/**
+ * 静态资源的内容指纹。
+ *
+ * 部署到 Railway / Cloudflare 之后，边缘节点会把 .js / .css 缓存起来
+ * （实测被改写成 max-age=14400），而 HTML 是 no-cache。
+ * 结果就是「新 HTML + 旧 JS」，页面直接报错。
+ * 给资源链接带上内容哈希，文件一变 URL 就变，缓存自然失效。
+ */
+function contentVersion(relPath) {
+  try {
+    const buf = fs.readFileSync(path.join(PUBLIC_DIR, relPath));
+    return crypto.createHash('sha1').update(buf).digest('hex').slice(0, 8);
+  } catch {
+    return '0';
+  }
+}
+
+function withAssetVersions(buf) {
+  let html = buf.toString('utf8');
+  for (const file of ['styles.css', 'app.js']) {
+    html = html.split(`"${file}"`).join(`"${file}?v=${contentVersion(file)}"`);
+  }
+  return Buffer.from(html, 'utf8');
+}
+
 function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
   const filePath = path.join(PUBLIC_DIR, rel);
@@ -288,12 +314,18 @@ function serveStatic(req, res, pathname) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       return res.end('404 Not Found');
     }
+
+    const ext = path.extname(filePath).toLowerCase();
+    const isHtml = ext === '.html';
+    const body = isHtml ? withAssetVersions(buf) : buf;
+
     res.writeHead(200, {
-      'content-type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
-      'content-length': buf.length,
-      'cache-control': 'no-cache',
+      'content-type': MIME[ext] || 'application/octet-stream',
+      'content-length': body.length,
+      // HTML 每次校验；带指纹的资源可以长期缓存
+      'cache-control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
     });
-    res.end(buf);
+    res.end(body);
   });
 }
 
