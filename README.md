@@ -89,7 +89,7 @@ sites: [
 | `VAULT_ISSUER` | vault 地址，如 `https://vault.colordev.space` |
 | `OAUTH_CLIENT_ID` | 客户端标识，如 `statu` |
 | `OAUTH_CLIENT_SECRET` | 与 vault 里登记的保持一致 |
-| `OAUTH_REDIRECT_URI` | 如 `https://statu.example.com/auth/callback`，必须与 vault 里完全一致 |
+| `OAUTH_REDIRECT_URI` | 如 `https://colordev.space/auth/callback`，必须与 vault 里完全一致。**站点有多个域名时用英文逗号分隔**，服务端按当前访问域名自动挑选，否则跨域会丢 state Cookie 导致登录失败 |
 | `ADMIN_EMAILS` | 管理员邮箱，逗号分隔；必须与 MemoVault 账号一致 |
 
 **同时要在 vault 的 `OAUTH_CLIENTS` 里注册这个客户端**，`redirectUris` 填上面的

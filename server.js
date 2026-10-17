@@ -411,12 +411,20 @@ function handleLogin(req, res) {
   }
 
   const { verifier, challenge, state } = auth.createFlowSecrets();
+  // 按当前访问域名挑选回调地址（站点同时挂在多个域名上）
+  const redirectUri = auth.resolveRedirectUri(req);
+
+  if (!redirectUri) {
+    console.warn('[auth] OAUTH_REDIRECT_URI 没有配置');
+    return redirect(res, '/?error=auth_not_configured');
+  }
+
   const cookies = [
     auth.serializeCookie(req, auth.COOKIE_STATE, state, auth.FLOW_MAX_AGE),
     auth.serializeCookie(req, auth.COOKIE_VERIFIER, verifier, auth.FLOW_MAX_AGE),
   ];
 
-  return redirect(res, auth.buildAuthorizeUrl({ state, challenge }), cookies);
+  return redirect(res, auth.buildAuthorizeUrl({ state, challenge, redirectUri }), cookies);
 }
 
 async function handleCallback(req, res, url) {
@@ -452,7 +460,8 @@ async function handleCallback(req, res, url) {
   }
 
   try {
-    const accessToken = await auth.exchangeCode(code, verifier);
+    const redirectUri = auth.resolveRedirectUri(req);
+    const accessToken = await auth.exchangeCode(code, verifier, redirectUri);
     const profile = await auth.fetchProfile(accessToken);
 
     // 核心规则：只有管理员能留下会话，其他人当场登出
