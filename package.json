@@ -1,0 +1,14 @@
+{
+  "name": "site-status",
+  "version": "1.0.0",
+  "private": true,
+  "description": "零依赖的站点状态监控面板：定时探测各站点可用性与响应速度",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
