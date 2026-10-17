@@ -13,11 +13,11 @@
     pending: '检测中',
   };
 
-  const OVERALL_TEXT = {
-    operational: ['全部系统正常', '所有站点均可正常访问'],
-    degraded: ['部分站点响应缓慢', '站点可访问，但响应时间偏高'],
-    down: ['有站点出现故障', '请查看下方异常站点的详细信息'],
-    pending: ['正在检测…', '首次检测可能需要几秒钟'],
+  const OVERALL_TITLE = {
+    operational: '全部系统正常',
+    degraded: '部分站点响应缓慢',
+    down: '有站点出现故障',
+    pending: '正在检测…',
   };
 
   const BAR_CLASS = { 1: 'bar--ok', 2: 'bar--slow', 0: 'bar--down' };
@@ -80,14 +80,12 @@
   function renderBanner(data) {
     const banner = $('#banner');
     const overall = data.overall || 'pending';
-    const [title, desc] = OVERALL_TEXT[overall] || OVERALL_TEXT.pending;
 
     banner.className = 'banner' + (overall === 'operational' ? ' is-ok'
       : overall === 'degraded' ? ' is-slow'
       : overall === 'down' ? ' is-down' : '');
 
-    $('#bannerTitle').textContent = title;
-    $('#bannerDesc').textContent = desc;
+    $('#bannerTitle').textContent = OVERALL_TITLE[overall] || OVERALL_TITLE.pending;
 
     const allMs = data.sites.filter((s) => s.status !== 'pending' && s.ms != null).map((s) => s.ms);
     const avgMs = allMs.length ? Math.round(allMs.reduce((a, b) => a + b, 0) / allMs.length) : null;
@@ -185,16 +183,10 @@
   function render(data) {
     document.title = data.title || '站点状态';
     $('#siteTitle').textContent = data.title || '站点状态';
-    $('#siteSubtitle').textContent = data.subtitle || '';
     $('#updated').textContent = '更新于 ' + timeText(data.updatedAt);
 
     renderBanner(data);
     renderGroups(data);
-
-    const interval = Math.round((data.intervalMs || 60000) / 1000);
-    $('#legendNote').textContent =
-      `每 ${interval} 秒自动检测一次 · 响应超过 ${data.slowMs || 1500}ms 记为缓慢 · 5xx 与连接失败记为故障`;
-    $('#footerInfo').textContent = `${data.title || '站点状态'} · 共 ${data.counts.total} 个站点`;
   }
 
   /* ---------- 数据获取 ---------- */

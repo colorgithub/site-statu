@@ -15,10 +15,7 @@
   <div class="wrap topbar__inner">
     <div class="brand">
       <span class="brand__mark" aria-hidden="true"></span>
-      <div class="brand__text">
-        <h1 id="siteTitle">站点状态</h1>
-        <p id="siteSubtitle">实时监控各站点可用性与响应速度</p>
-      </div>
+      <h1 id="siteTitle">站点状态</h1>
     </div>
 
     <div class="topbar__actions">
@@ -47,10 +44,7 @@
   <!-- 总体状态 -->
   <section class="banner" id="banner" aria-live="polite">
     <span class="banner__dot" id="bannerDot"></span>
-    <div class="banner__text">
-      <strong id="bannerTitle">正在检测…</strong>
-      <span id="bannerDesc">首次检测可能需要几秒钟</span>
-    </div>
+    <strong class="banner__title" id="bannerTitle">正在检测…</strong>
     <dl class="banner__metrics" id="bannerMetrics"></dl>
   </section>
 
@@ -64,28 +58,10 @@
       <span class="ta-r">状态</span>
     </div>
     <div id="groups"></div>
-    <div class="empty" id="empty" hidden>配置里还没有站点，编辑 <code>sites.config.js</code> 添加即可。</div>
-  </section>
-
-  <!-- 图例与说明 -->
-  <section class="legend">
-    <div class="legend__items">
-      <span class="legend__item"><i class="dot dot--ok"></i>正常</span>
-      <span class="legend__item"><i class="dot dot--slow"></i>缓慢</span>
-      <span class="legend__item"><i class="dot dot--down"></i>故障</span>
-      <span class="legend__item"><i class="dot dot--pending"></i>检测中</span>
-    </div>
-    <p class="legend__note" id="legendNote"></p>
+    <div class="empty" id="empty" hidden>还没有站点，编辑 <code>sites.config.js</code> 添加。</div>
   </section>
 
 </main>
-
-<footer class="footer">
-  <div class="wrap footer__inner">
-    <span id="footerInfo">站点状态监控</span>
-    <span>数据保存在本地 · <code>data/history.json</code></span>
-  </div>
-</footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
