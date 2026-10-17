@@ -33,14 +33,11 @@ module.exports = {
 
   /* ---------- 要监控的站点 ---------- */
   sites: [
-    { id: 'github',    name: 'GitHub',          url: 'https://github.com',                group: '开发平台' },
-    { id: 'npm',       name: 'npm Registry',    url: 'https://registry.npmjs.org',        group: '开发平台' },
+    { id: 'blog-colordev',  name: 'colordev.space',        url: 'https://blog.colordev.space',        group: '博客' },
+    { id: 'blog-dpdns',     name: 'color111111.dpdns.org', url: 'https://blog.color111111.dpdns.org', group: '博客' },
 
-    { id: 'cloudflare', name: 'Cloudflare',     url: 'https://www.cloudflare.com',        group: '云服务' },
-    { id: 'vercel',     name: 'Vercel',         url: 'https://vercel.com',                group: '云服务' },
-
-    { id: 'mdn',        name: 'MDN 文档',       url: 'https://developer.mozilla.org',     group: '文档与社区' },
-    { id: 'stackoverflow', name: 'Stack Overflow', url: 'https://stackoverflow.com',      group: '文档与社区' }
+    { id: 'vault-colordev', name: 'colordev.space',        url: 'https://vault.colordev.space',       group: 'Vault' },
+    { id: 'vault-dpdns',    name: 'color111111.dpdns.org', url: 'https://vault.color111111.dpdns.org', group: 'Vault' },
 
     // 本地站点示例（需要服务处于运行状态时才显示正常）：
     // { id: 'my-blog', name: '我的博客', url: 'http://localhost:3001', group: '自建站点' },
