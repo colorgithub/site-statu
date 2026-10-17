@@ -25,6 +25,15 @@
   const PILL_CLASS = { operational: 'pill--ok', degraded: 'pill--slow', down: 'pill--down', pending: 'pill--pending' };
   const BAR_COUNT = 40;
 
+  const AUTH_ERRORS = {
+    not_admin: '你不是管理员，已自动退出登录。',
+    auth_not_configured: '管理登录尚未配置，请联系站长。',
+    invalid_state: '登录请求已失效，请重新发起。',
+    missing_code: '授权服务器没有返回授权码，请重试。',
+    oauth_failed: '登录失败，请稍后重试；若持续失败请查看服务端日志。',
+    access_denied: '你取消了授权。',
+  };
+
   /* ---------- 工具 ---------- */
   const esc = (s) =>
     String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
@@ -73,7 +82,21 @@
     toast.textContent = msg;
     toast.className = 'toast is-on' + (isErr ? ' is-err' : '');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast.className = 'toast'; }, 2600);
+    toastTimer = setTimeout(() => { toast.className = 'toast'; }, isErr ? 4200 : 2600);
+  }
+
+  /* ---------- 公告横幅 ---------- */
+  function renderNotice(banner) {
+    const el = $('#notice');
+    const textEl = $('#noticeText');
+    if (!el || !textEl) return;
+
+    const on = banner && banner.enabled && banner.text;
+    if (!on) { el.hidden = true; return; }
+
+    el.hidden = false;
+    el.className = 'notice notice--' + (banner.level || 'info');
+    textEl.textContent = banner.text;
   }
 
   /* ---------- 渲染 ---------- */
@@ -185,6 +208,7 @@
     $('#siteTitle').textContent = data.title || '站点状态';
     $('#updated').textContent = '更新于 ' + timeText(data.updatedAt);
 
+    renderNotice(data.banner);
     renderBanner(data);
     renderGroups(data);
   }
@@ -220,6 +244,200 @@
 
   $('#refreshBtn')?.addEventListener('click', () => load(true));
 
+  /* ==========================================================================
+     管理员：登录入口 + 编辑面板
+     ========================================================================== */
+  const ICON_LOGOUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17l5-5-5-5"/><path d="M20 12H9"/><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6"/></svg>';
+  const ICON_LOGIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>';
+  const ICON_CLOSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+  let me = { admin: false, configured: false };
+  let draft = { sites: [], banner: { enabled: false, text: '', level: 'info' } };
+
+  async function initAdminArea() {
+    const area = $('#adminArea');
+    if (!area) return;
+
+    try {
+      const res = await fetch('/api/me', { cache: 'no-store' });
+      me = await res.json();
+    } catch {
+      me = { admin: false, configured: false };
+    }
+
+    if (me.admin) {
+      area.innerHTML =
+        `<span class="admin-chip" title="${esc(me.email)}">${esc(me.name || me.email)}</span>` +
+        '<button class="btn" type="button" id="editBtn">编辑</button>' +
+        `<a class="icon-btn" href="/auth/logout" title="退出登录" aria-label="退出登录">${ICON_LOGOUT}</a>`;
+      $('#editBtn')?.addEventListener('click', openEditor);
+    } else if (me.configured) {
+      area.innerHTML =
+        `<a class="icon-btn" href="/auth/login" title="管理员登录" aria-label="管理员登录">${ICON_LOGIN}</a>`;
+    } else {
+      area.innerHTML = '';
+    }
+  }
+
+  /* ---------- 编辑面板 ---------- */
+  function renderSiteEditor() {
+    const wrap = $('#siteEditor');
+    if (!wrap) return;
+
+    if (!draft.sites.length) {
+      wrap.innerHTML = '<p class="field-hint">还没有站点，点下面的「添加站点」。</p>';
+      return;
+    }
+
+    wrap.innerHTML = draft.sites
+      .map((site, i) => `
+        <div class="site-row" data-i="${i}">
+          <input class="input" data-k="name" value="${esc(site.name)}" placeholder="名称" maxlength="60" aria-label="名称" />
+          <input class="input" data-k="url" value="${esc(site.url)}" placeholder="https://example.com" maxlength="500" aria-label="地址" spellcheck="false" />
+          <input class="input" data-k="group" value="${esc(site.group)}" placeholder="分组" maxlength="40" aria-label="分组" />
+          <button class="icon-btn site-row__del" type="button" data-del="${i}" aria-label="删除站点">${ICON_CLOSE}</button>
+        </div>`)
+      .join('');
+  }
+
+  async function openEditor() {
+    try {
+      const res = await fetch('/api/settings', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+
+      draft = {
+        sites: (data.sites || []).map((s) => ({
+          id: s.id,
+          name: s.name || '',
+          url: s.url || '',
+          group: s.group && s.group !== '未分组' ? s.group : '',
+        })),
+        banner: {
+          enabled: Boolean(data.banner && data.banner.enabled),
+          text: (data.banner && data.banner.text) || '',
+          level: (data.banner && data.banner.level) || 'info',
+        },
+      };
+    } catch (err) {
+      showToast('读取配置失败：' + err.message, true);
+      return;
+    }
+
+    renderSiteEditor();
+    $('#bannerEnabled').checked = draft.banner.enabled;
+    $('#bannerText').value = draft.banner.text;
+    $('#bannerLevel').value = draft.banner.level;
+
+    const modal = $('#editor');
+    modal.hidden = false;
+    document.body.classList.add('no-scroll');
+    $('#bannerText').focus();
+  }
+
+  function closeEditor() {
+    const modal = $('#editor');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    document.body.classList.remove('no-scroll');
+  }
+
+  async function saveEditor() {
+    const btn = $('#saveBtn');
+    if (btn) btn.disabled = true;
+
+    try {
+      // 名称和地址都空的行视为「误点添加」，直接丢掉
+      const sites = draft.sites
+        .map((s) => ({
+          id: s.id,
+          name: (s.name || '').trim(),
+          url: (s.url || '').trim(),
+          group: (s.group || '').trim(),
+        }))
+        .filter((s) => s.name || s.url);
+
+      const payload = {
+        sites,
+        banner: {
+          enabled: $('#bannerEnabled').checked,
+          text: $('#bannerText').value.trim(),
+          level: $('#bannerLevel').value,
+        },
+      };
+
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        showToast(data.error || '保存失败', true);
+        return;
+      }
+
+      closeEditor();
+      showToast('已保存');
+      await load(false);
+    } catch (err) {
+      showToast('保存失败：' + err.message, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // 弹窗交互
+  $('#editor')?.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close]')) closeEditor();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeEditor();
+  });
+
+  // 站点行的编辑与删除（事件委托，行是动态渲染的）
+  $('#siteEditor')?.addEventListener('input', (e) => {
+    const row = e.target.closest('.site-row');
+    if (!row) return;
+    const index = Number(row.dataset.i);
+    const key = e.target.dataset.k;
+    if (!key || !draft.sites[index]) return;
+    draft.sites[index][key] = e.target.value;
+  });
+
+  $('#siteEditor')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-del]');
+    if (!btn) return;
+    draft.sites.splice(Number(btn.dataset.del), 1);
+    renderSiteEditor();
+  });
+
+  $('#addSiteBtn')?.addEventListener('click', () => {
+    draft.sites.push({ name: '', url: '', group: '' });
+    renderSiteEditor();
+    const rows = document.querySelectorAll('.site-row');
+    const last = rows[rows.length - 1];
+    last?.querySelector('input[data-k="name"]')?.focus();
+  });
+
+  $('#saveBtn')?.addEventListener('click', saveEditor);
+
+  /* ---------- 登录结果提示 ---------- */
+  (function handleAuthResult() {
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get('error');
+    if (!err) return;
+
+    showToast(AUTH_ERRORS[err] || ('登录未完成：' + err), true);
+
+    params.delete('error');
+    const qs = params.toString();
+    history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
+  })();
+
+  /* ---------- 启动 ---------- */
+  initAdminArea();
   load(false);
   setInterval(() => load(false), 15000);
 

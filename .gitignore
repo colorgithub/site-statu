@@ -2,3 +2,8 @@ node_modules/
 data/
 *.log
 .DS_Store
+
+# 本地临时脚本与截图（以 __ 开头）
+__*
+.env
+.env.local

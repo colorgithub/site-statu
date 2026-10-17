@@ -6,10 +6,13 @@
  *   node server.js
  *
  * 功能：
- *   1. 按固定间隔探测 sites.config.js 中的每个站点（HTTP 状态码 + 响应耗时）
+ *   1. 按固定间隔探测监控列表里的每个站点（HTTP 状态码 + 响应耗时）
  *   2. 保存最近 N 次检测历史到 data/history.json，重启不丢
  *   3. 提供 /api/status、/api/check 接口
  *   4. 同时作为静态服务器托管 public/ 下的状态面板
+ *   5. 管理员可通过 vault OAuth 登录后，在页面上编辑「监控站点」与「公告横幅」
+ *
+ * 可编辑配置存在 data/settings.json；首次启动用 sites.config.js 的 sites 做种子。
  */
 
 const http = require('node:http');
@@ -25,6 +28,9 @@ const DATA_DIR = path.join(ROOT, 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 
 const config = require('./sites.config.js');
+const settings = require('./lib/settings.js');
+const auth = require('./lib/auth.js');
+
 const PORT = Number(process.env.PORT) || Number(config.port) || 3000;
 
 /* 状态取值 */
@@ -36,6 +42,18 @@ const HISTORY_CODE = { down: 0, operational: 1, degraded: 2 };   // 存盘用的
  * ------------------------------------------------------------------ */
 const state = new Map();
 
+function emptyState(history) {
+  return {
+    history: Array.isArray(history) ? history.slice(-config.historySize) : [],
+    status: STATUS.PENDING,
+    code: null,
+    ms: null,
+    error: null,
+    hint: null,
+    lastChecked: null,
+  };
+}
+
 function loadHistory() {
   let saved = null;
   try {
@@ -43,17 +61,27 @@ function loadHistory() {
   } catch (err) {
     if (err.code !== 'ENOENT') console.warn('[warn] 读取历史失败：' + err.message);
   }
-  for (const site of config.sites) {
+
+  state.clear();
+  for (const site of settings.get().sites) {
     const prev = saved && Array.isArray(saved[site.id]) ? saved[site.id] : [];
-    state.set(site.id, {
-      history: prev.slice(-config.historySize),
-      status: STATUS.PENDING,
-      code: null,
-      ms: null,
-      error: null,
-      hint: null,
-      lastChecked: null,
-    });
+    state.set(site.id, emptyState(prev));
+  }
+}
+
+/**
+ * 让内存状态与当前站点列表对齐：
+ * 保留下来的站点沿用历史，新增的空状态开始，删掉的直接丢弃。
+ */
+function syncState() {
+  const sites = settings.get().sites;
+  const keep = new Set(sites.map((site) => site.id));
+
+  for (const id of [...state.keys()]) {
+    if (!keep.has(id)) state.delete(id);
+  }
+  for (const site of sites) {
+    if (!state.has(site.id)) state.set(site.id, emptyState());
   }
 }
 
@@ -154,8 +182,9 @@ async function runCycle() {
 
   const startedAt = Date.now();
   try {
+    const sites = settings.get().sites;
     const results = await Promise.all(
-      config.sites.map(async (site) => ({ site, result: await probe(site) }))
+      sites.map(async (site) => ({ site, result: await probe(site) }))
     );
 
     const now = Date.now();
@@ -184,7 +213,7 @@ async function runCycle() {
     saveHistory();
     const downCount = results.filter((r) => !r.result.reachable).length;
     console.log(
-      `[${new Date().toLocaleTimeString('zh-CN')}] 检测完成 · ${config.sites.length} 个站点` +
+      `[${new Date().toLocaleTimeString('zh-CN')}] 检测完成 · ${sites.length} 个站点` +
         (downCount ? ` · ${downCount} 个异常` : ' · 全部正常') +
         ` · 耗时 ${Date.now() - startedAt}ms`
     );
@@ -199,8 +228,10 @@ async function runCycle() {
  * 4. 生成 API 数据
  * ------------------------------------------------------------------ */
 function buildSnapshot() {
-  const sites = config.sites.map((site) => {
-    const st = state.get(site.id);
+  const current = settings.get();
+
+  const sites = current.sites.map((site) => {
+    const st = state.get(site.id) || emptyState();
     const history = st.history;
     const total = history.length;
     const okCount = history.filter((h) => h.s !== HISTORY_CODE.down).length;
@@ -235,6 +266,8 @@ function buildSnapshot() {
   return {
     title: config.title,
     subtitle: config.subtitle,
+    // 公告横幅与状态条是两回事：横幅由管理员手写，状态条由探测结果驱动
+    banner: current.banner,
     overall,
     updatedAt: Date.now(),
     intervalMs: config.intervalMs,
@@ -251,7 +284,7 @@ function buildSnapshot() {
 }
 
 /* ------------------------------------------------------------------ *
- * 5. HTTP 服务：API + 静态文件
+ * 5. HTTP 工具
  * ------------------------------------------------------------------ */
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -264,14 +297,54 @@ const MIME = {
   '.woff2': 'font/woff2',
 };
 
-function sendJson(res, code, payload) {
+function sendJson(res, code, payload, extraHeaders) {
   const body = JSON.stringify(payload);
   res.writeHead(code, {
     'content-type': MIME['.json'],
     'content-length': Buffer.byteLength(body),
     'cache-control': 'no-store',
+    ...(extraHeaders || {}),
   });
   res.end(body);
+}
+
+function redirect(res, location, cookies) {
+  const headers = { location };
+  if (cookies && cookies.length) headers['set-cookie'] = cookies;
+  res.writeHead(302, headers);
+  res.end();
+}
+
+function readJsonBody(req, limit = 128 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        const err = new Error('请求体过大');
+        err.expose = true;
+        req.destroy();
+        return reject(err);
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8').trim();
+      if (!text) return resolve({});
+      try {
+        resolve(JSON.parse(text));
+      } catch {
+        const err = new Error('请求体不是合法 JSON');
+        err.expose = true;
+        reject(err);
+      }
+    });
+
+    req.on('error', reject);
+  });
 }
 
 /**
@@ -329,9 +402,159 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const { pathname } = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+/* ------------------------------------------------------------------ *
+ * 6. 认证路由（vault OAuth）
+ * ------------------------------------------------------------------ */
+function handleLogin(req, res) {
+  if (!auth.isConfigured()) {
+    return redirect(res, '/?error=auth_not_configured');
+  }
 
+  const { verifier, challenge, state } = auth.createFlowSecrets();
+  const cookies = [
+    auth.serializeCookie(req, auth.COOKIE_STATE, state, auth.FLOW_MAX_AGE),
+    auth.serializeCookie(req, auth.COOKIE_VERIFIER, verifier, auth.FLOW_MAX_AGE),
+  ];
+
+  return redirect(res, auth.buildAuthorizeUrl({ state, challenge }), cookies);
+}
+
+async function handleCallback(req, res, url) {
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const oauthError = url.searchParams.get('error');
+
+  const cookies = auth.parseCookies(req);
+  const expectedState = cookies[auth.COOKIE_STATE] || '';
+  const verifier = cookies[auth.COOKIE_VERIFIER] || '';
+
+  // 无论成败，临时 Cookie 都要清掉
+  const clearFlow = [
+    auth.clearCookie(req, auth.COOKIE_STATE),
+    auth.clearCookie(req, auth.COOKIE_VERIFIER),
+  ];
+
+  const bail = (reason) => {
+    redirect(res, `/?error=${encodeURIComponent(reason)}`, clearFlow);
+  };
+
+  if (oauthError) {
+    console.warn('[auth] 授权失败或被拒绝：' + oauthError);
+    return bail(oauthError);
+  }
+  if (!state || !expectedState || !auth.safeEqual(state, expectedState)) {
+    console.warn('[auth] state 校验失败');
+    return bail('invalid_state');
+  }
+  if (!code || !verifier) {
+    console.warn('[auth] 回调缺少 code 或 verifier');
+    return bail('missing_code');
+  }
+
+  try {
+    const accessToken = await auth.exchangeCode(code, verifier);
+    const profile = await auth.fetchProfile(accessToken);
+
+    // 核心规则：只有管理员能留下会话，其他人当场登出
+    if (!auth.isAdminEmail(profile.email)) {
+      console.warn(`[auth] 非管理员登录，已立即退出：${profile.email}`);
+      return bail('not_admin');
+    }
+
+    const session = auth.buildSessionCookie(req, {
+      sub: profile.sub,
+      email: profile.email,
+      name: profile.name,
+      exp: Date.now() + auth.SESSION_MAX_AGE * 1000,
+    });
+
+    console.log(`[auth] 管理员登录：${profile.email}`);
+    return redirect(res, '/', [...clearFlow, session]);
+  } catch (err) {
+    console.error('[auth] 回调处理失败：' + err.message);
+    return bail('oauth_failed');
+  }
+}
+
+function handleLogout(req, res) {
+  return redirect(res, '/', [auth.clearCookie(req, auth.COOKIE_SESSION)]);
+}
+
+function handleMe(req, res) {
+  const session = auth.getSession(req);
+  const cookies = auth.parseCookies(req);
+  const hadCookie = Boolean(cookies[auth.COOKIE_SESSION]);
+
+  // Cookie 存在但已失效（过期 / 被移出 ADMIN_EMAILS）→ 顺手清掉
+  const extra = !session && hadCookie ? { 'set-cookie': [auth.clearCookie(req, auth.COOKIE_SESSION)] } : undefined;
+
+  if (!session) {
+    return sendJson(res, 200, { authenticated: false, admin: false, configured: auth.isConfigured() }, extra);
+  }
+  return sendJson(
+    res,
+    200,
+    { authenticated: true, admin: true, configured: true, email: session.email, name: session.name },
+    extra
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 7. 配置读写
+ * ------------------------------------------------------------------ */
+function handleGetSettings(req, res) {
+  const current = settings.get();
+  return sendJson(res, 200, { sites: current.sites, banner: current.banner });
+}
+
+async function handlePutSettings(req, res) {
+  const session = auth.getSession(req);
+  if (!session) {
+    return sendJson(res, 401, { error: '未登录或没有管理员权限' });
+  }
+
+  try {
+    const body = await readJsonBody(req);
+    const saved = settings.save({ sites: body.sites, banner: body.banner });
+
+    // 站点有增删时同步内存状态，并补跑一轮检测让新站点尽快出状态
+    syncState();
+    runCycle().catch((err) => console.error('[error] 保存后补检测失败：' + err.message));
+
+    console.log(
+      `[settings] ${session.email} 更新配置 · ${saved.sites.length} 个站点 · 横幅${
+        saved.banner.enabled ? '开' : '关'
+      }`
+    );
+    return sendJson(res, 200, { ok: true, sites: saved.sites, banner: saved.banner });
+  } catch (err) {
+    if (!err.expose) console.error('[error] 保存配置失败：' + err.message);
+    return sendJson(res, err.expose ? 400 : 500, {
+      error: err.expose ? err.message : '保存失败，请查看服务端日志',
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 8. 路由
+ * ------------------------------------------------------------------ */
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const { pathname } = url;
+
+  /* ---- 认证 ---- */
+  if (pathname === '/auth/login' && req.method === 'GET') return handleLogin(req, res);
+  if (pathname === '/auth/callback' && req.method === 'GET') return handleCallback(req, res, url);
+  if (pathname === '/auth/logout') return handleLogout(req, res);
+
+  /* ---- 账号与配置 ---- */
+  if (pathname === '/api/me' && req.method === 'GET') return handleMe(req, res);
+  if (pathname === '/api/settings' && req.method === 'GET') return handleGetSettings(req, res);
+  if (pathname === '/api/settings' && (req.method === 'PUT' || req.method === 'PATCH')) {
+    return handlePutSettings(req, res);
+  }
+
+  /* ---- 只读数据 ---- */
   if (pathname === '/api/status') {
     return sendJson(res, 200, buildSnapshot());
   }
@@ -342,13 +565,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/config') {
+    const current = settings.get();
     return sendJson(res, 200, {
       title: config.title,
       subtitle: config.subtitle,
       intervalMs: config.intervalMs,
       timeoutMs: config.timeoutMs,
       slowMs: config.slowMs,
-      sites: config.sites.map(({ id, name, url, group }) => ({ id, name, url, group })),
+      sites: current.sites.map(({ id, name, url, group }) => ({ id, name, url, group })),
     });
   }
 
@@ -361,18 +585,22 @@ const server = http.createServer(async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ *
- * 6. 启动
+ * 9. 启动
  * ------------------------------------------------------------------ */
+settings.load();
 loadHistory();
 
 server.listen(PORT, () => {
   const url = `http://localhost:${PORT}`;
+  const current = settings.get();
+
   console.log('');
   console.log('  站点状态监控已启动');
   console.log('  ────────────────────────────────────');
   console.log(`  面板地址   ${url}`);
-  console.log(`  监控站点   ${config.sites.length} 个`);
+  console.log(`  监控站点   ${current.sites.length} 个`);
   console.log(`  检测间隔   ${Math.round(config.intervalMs / 1000)} 秒`);
+  console.log(`  管理登录   ${auth.isConfigured() ? '已启用（vault OAuth）' : '未配置（缺少环境变量）'}`);
   console.log('  ────────────────────────────────────');
   console.log('  按 Ctrl+C 停止');
   console.log('');
