@@ -498,7 +498,19 @@ function handleMe(req, res) {
   const extra = !session && hadCookie ? { 'set-cookie': [auth.clearCookie(req, auth.COOKIE_SESSION)] } : undefined;
 
   if (!session) {
-    return sendJson(res, 200, { authenticated: false, admin: false, configured: auth.isConfigured() }, extra);
+    // 顺手告诉前端缺哪些环境变量（只有变量名，不含值），比一个 configured=false 有用得多
+    const status = auth.getConfigStatus();
+    return sendJson(
+      res,
+      200,
+      {
+        authenticated: false,
+        admin: false,
+        configured: status.ready,
+        missing: status.ready ? undefined : status.missing,
+      },
+      extra
+    );
   }
   return sendJson(
     res,
@@ -609,7 +621,11 @@ server.listen(PORT, () => {
   console.log(`  面板地址   ${url}`);
   console.log(`  监控站点   ${current.sites.length} 个`);
   console.log(`  检测间隔   ${Math.round(config.intervalMs / 1000)} 秒`);
-  console.log(`  管理登录   ${auth.isConfigured() ? '已启用（vault OAuth）' : '未配置（缺少环境变量）'}`);
+  const authStatus = auth.getConfigStatus();
+  console.log(`  管理登录   ${authStatus.ready ? '已启用（vault OAuth）' : '未启用'}`);
+  if (!authStatus.ready) {
+    console.log(`  缺少变量   ${authStatus.missing.join('、')}`);
+  }
   console.log('  ────────────────────────────────────');
   console.log('  按 Ctrl+C 停止');
   console.log('');
